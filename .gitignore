@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+tareas.db
+prueba.db
+salidas/
+*.wav
+*.mp3
+.env
