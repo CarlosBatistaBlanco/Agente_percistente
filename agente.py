@@ -52,18 +52,21 @@ def comando(texto, origen="panel", chat_id=""):
 def _orden_telegram(m):
     chat = m["destino"]
     telegram.accion_escribiendo(chat)
-    # Acuse de recibo inmediato para que nunca se sienta pegado
-    telegram.enviar(chat, "⚙️ *Procesando su orden, señor...*")
     try:
-        r = comando(m["mensaje"].replace("[Nota de voz transcrita]\n", ""), "telegram", chat)
+        if m.get("imagen_bytes"):
+            import asistente
+            r = asistente.analizar_imagen_orden(m["imagen_bytes"], m.get("mensaje", ""), chat)
+        else:
+            r = comando(m["mensaje"].replace("[Nota de voz transcrita]\n", ""), "telegram", chat)
     except Exception as e:
         r = {"texto": f"Tuve un problema: {e}"[:500]}
-    
+
     texto_resp = r.get("texto", "")
-    telegram.enviar(chat, texto_resp, r.get("archivo") or "", botones=r.get("botones"))
-    
-    # Respuesta por voz SIEMPRE si VOZ_RESPUESTAS=true o si tú le hablaste por audio
-    if config.VOZ_RESPUESTAS or m.get("es_voz"):
+    texto_mostrar = f"🎤 «{m['transcrito']}»\n\n{texto_resp}" if m.get("transcrito") else texto_resp
+    telegram.enviar(chat, texto_mostrar, r.get("archivo") or "", botones=r.get("botones"))
+
+    # Respuesta por voz si VOZ_RESPUESTAS=true o si hablaste por audio
+    if (config.VOZ_RESPUESTAS or m.get("es_voz")) and texto_resp:
         try:
             telegram.enviar_voz(chat, texto_resp)
         except Exception as e:
@@ -76,9 +79,11 @@ def bucle_telegram():
             mensajes, acciones = telegram.revisar()
             for m in mensajes:
                 if m.pop("es_orden", False):
-                    _orden_telegram(m)
+                    threading.Thread(target=_orden_telegram, args=(m,), daemon=True).start()
                 else:
                     m.pop("es_voz", None)
+                    m.pop("transcrito", None)
+                    m.pop("imagen_bytes", None)
                     registrar("telegram", **m)
             for a in acciones:
                 accion, _, tid = a["data"].partition(":")
