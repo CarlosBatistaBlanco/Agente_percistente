@@ -59,8 +59,9 @@ WHATSAPP_NUMEROS_PERMITIDOS = _lista("WHATSAPP_NUMEROS_PERMITIDOS")
 
 # --- Panel y ciclo ---
 INTERVALO_SEGUNDOS = int(os.getenv("INTERVALO_SEGUNDOS", "60"))
-PANEL_PUERTO = int(os.getenv("PANEL_PUERTO", "5000"))
-PANEL_URL = os.getenv("PANEL_URL", f"http://127.0.0.1:{PANEL_PUERTO}")
+PANEL_PUERTO = int(os.getenv("PORT", os.getenv("PANEL_PUERTO", "5000")))
+PANEL_HOST = os.getenv("PANEL_HOST", "0.0.0.0" if os.getenv("PORT") else "127.0.0.1")
+PANEL_URL = os.getenv("PANEL_URL", f"http://{PANEL_HOST}:{PANEL_PUERTO}")
 PANEL_USUARIO = os.getenv("PANEL_USUARIO", "admin")
 PANEL_CLAVE = os.getenv("PANEL_CLAVE", "")
 
