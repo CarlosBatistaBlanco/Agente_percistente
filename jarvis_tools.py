@@ -6,7 +6,6 @@
 import os
 import subprocess
 import psutil
-from duckduckgo_search import DDGS
 
 import db
 
@@ -47,8 +46,9 @@ def diagnostico_sistema():
     try:
         cpu = psutil.cpu_percent(interval=0.5)
         ram = psutil.virtual_memory()
-        disco = psutil.disk_usage("C:\\")
-        bateria = psutil.sensors_battery()
+        raiz = "C:\\" if os.name == "nt" else "/"
+        disco = psutil.disk_usage(raiz)
+        bateria = psutil.sensors_battery() if hasattr(psutil, "sensors_battery") else None
 
         bat_str = "No detectada (PC de escritorio o sin sensor)"
         if bateria:
