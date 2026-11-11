@@ -105,14 +105,41 @@ def ejecutar(texto, origen, cola, registrar, chat_id=""):
         ruta = jarvis_tools.capturar_pantalla()
         return {"texto": "Captura de pantalla realizada con éxito, señor.", "archivo": ruta}
 
-    m_temp = re.search(r"(?:recuérdame|recuerdame|avísame|avisame|alarma en|temporizador en)\s+(\d+)\s*(minutos?|segundos?|horas?)\s*(?:para|de|que)?\s*(.*)", txt_lower)
+    if any(k in txt_lower for k in ["/briefing", "briefing", "resumen del día", "resumen del dia", "resumen de hoy"]):
+        import jarvis_tools
+        return {"texto": jarvis_tools.generar_briefing(chat_id or cid)}
+
+    if any(k in txt_lower for k in ["mis recordatorios", "qué recordatorios", "que recordatorios", "mis alarmas", "ver recordatorios"]):
+        import jarvis_tools
+        return {"texto": jarvis_tools.listar_recordatorios(chat_id or cid)}
+
+    m_cancel_rec = re.search(r"cancela(?:r)?\s+(?:el\s+)?(?:recordatorio|alarma)\s*#?(\d+)", txt_lower)
+    if m_cancel_rec:
+        import jarvis_tools
+        return {"texto": jarvis_tools.cancelar_recordatorio(int(m_cancel_rec.group(1)))}
+
+    m_hora = re.search(r"(?:recuérdame|recuerdame|avísame|avisame|alarma|recordatorio)\s+(mañana\s+)?a\s+las?\s+(\d{1,2})(?::(\d{2}))?\s*(?:de\s+la\s+)?(pm|am|tarde|noche|mañana)?\s*(?:para|de|que)?\s*(.*)", txt_lower)
+    if m_hora:
+        import jarvis_tools
+        manana = bool(m_hora.group(1))
+        h = int(m_hora.group(2))
+        mn = int(m_hora.group(3) or 0)
+        suf = (m_hora.group(4) or "").strip()
+        if suf in ("pm", "tarde", "noche") and h < 12:
+            h += 12
+        elif suf in ("am",) and h == 12:
+            h = 0
+        motivo = m_hora.group(5).strip() or "Recordatorio programado"
+        return {"texto": jarvis_tools.crear_recordatorio_hora(h % 24, mn % 60, motivo, manana, chat_id or cid)}
+
+    m_temp = re.search(r"(?:recuérdame|recuerdame|avísame|avisame|alarma|temporizador)\s+(?:en\s+)?(\d+)\s*(minutos?|segundos?|horas?)\s*(?:para|de|que)?\s*(.*)", txt_lower)
     if m_temp:
         import jarvis_tools
         cant = int(m_temp.group(1))
         unidad = m_temp.group(2)
         motivo = m_temp.group(3).strip() or "Recordatorio programado"
         segs = cant * 3600 if "hora" in unidad else (cant * 60 if "min" in unidad else cant)
-        return {"texto": jarvis_tools.crear_temporizador(segs, motivo, chat_id)}
+        return {"texto": jarvis_tools.crear_temporizador(segs, motivo, chat_id or cid)}
 
     if any(txt_lower.startswith(k) for k in ["busca en internet ", "busca en la web ", "investiga ", "noticias de ", "precio de ", "clima en "]):
         import jarvis_tools
