@@ -36,26 +36,53 @@ def _json(texto):
         return json.loads(m.group(0))
 
 
-def _llamar(prompt, temperatura=0.2, extra_partes=None):
+MODELOS_RESPALDO = [
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-3-flash-preview",
+    "gemini-flash-lite-latest",
+    "gemini-flash-latest",
+]
+
+
+def _llamar(prompt, temperatura=0.2, extra_partes=None, modelos_extra=None):
+    import time
     if not config.GEMINI_API_KEY:
         raise RuntimeError("Falta GEMINI_API_KEY en el archivo .env")
-    r = requests.post(
-        URL.format(m=config.GEMINI_MODELO),
-        params={"key": config.GEMINI_API_KEY},
-        json={
-            "systemInstruction": {"parts": [{"text": SISTEMA}]},
-            "contents": [{"role": "user",
-                          "parts": (extra_partes or []) + [{"text": prompt}]}],
-            "generationConfig": {"temperature": temperatura,
-                                 "responseMimeType": "application/json"},
-        },
-        timeout=300,
-    )
-    if r.status_code != 200:
-        raise RuntimeError(f"Error Gemini {r.status_code}: {r.text[:500]}")
-    data = r.json()
-    partes = data["candidates"][0]["content"]["parts"]
-    return _json("".join(p.get("text", "") for p in partes))
+    candidatos = []
+    for m in [config.GEMINI_MODELO, *(modelos_extra or []), *MODELOS_RESPALDO]:
+        if m and m not in candidatos:
+            candidatos.append(m)
+
+    ultimo_error = "Sin respuesta de Gemini"
+    payload = {
+        "systemInstruction": {"parts": [{"text": SISTEMA}]},
+        "contents": [{"role": "user", "parts": (extra_partes or []) + [{"text": prompt}]}],
+        "generationConfig": {"temperature": temperatura, "responseMimeType": "application/json"},
+    }
+    for m in candidatos:
+        for intento in range(2):
+            try:
+                r = requests.post(
+                    URL.format(m=m),
+                    params={"key": config.GEMINI_API_KEY},
+                    json=payload,
+                    timeout=45,
+                )
+                if r.status_code == 200:
+                    partes = r.json()["candidates"][0]["content"]["parts"]
+                    return _json("".join(p.get("text", "") for p in partes))
+                ultimo_error = f"Error Gemini {r.status_code} ({m}): {r.text[:300]}"
+                if r.status_code in (400, 401, 403):
+                    raise RuntimeError(ultimo_error)
+                if r.status_code == 404:
+                    break  # modelo no disponible para esta clave -> pasar al siguiente
+                # 429 / 500 / 502 / 503 / 504 -> breve espera y reintento o fallback
+                time.sleep(1.5 * (intento + 1))
+            except requests.RequestException as e:
+                ultimo_error = f"Error red ({m}): {e}"
+                time.sleep(1)
+    raise RuntimeError(ultimo_error)
 
 
 # ---------------------------------------------------------------- VOZ
