@@ -48,16 +48,30 @@ def _ficha(t, corta=False):
             f"Respuesta propuesta:\n{t.get('respuesta') or '(aún sin respuesta)'}")
 
 
+def analizar_imagen_orden(imagen_bytes, instruccion="", chat_id="", mime="image/jpeg"):
+    cid = str(chat_id or "panel")
+    modo = db.obtener_modo(cid)
+    resp = ia.analizar_imagen(imagen_bytes, instruccion, mime, modo)
+    db.agregar_turno(cid, "usuario", f"[Imagen enviada] {instruccion}".strip())
+    db.agregar_turno(cid, "asistente", resp)
+    return {"texto": resp}
+
+
 def ejecutar(texto, origen, cola, registrar, chat_id=""):
     """Devuelve dict: texto (para mostrar/decir), botones (Telegram), archivo, ir_a (panel)."""
-    # Si viene con wake word en texto/voz ("Jarvis, qué tengo pendiente"), la extraemos
+    cid = str(chat_id or origen or "panel")
     patron_wake = rf"^\s*{re.escape(config.NOMBRE_ASISTENTE)}[,\s:]*\s*"
     texto_limpio = re.sub(patron_wake, "", texto.strip(), flags=re.IGNORECASE).strip() or texto.strip()
 
     pendientes = db.por_estado(*PENDIENTES)
+    txt_lower = texto_limpio.lower()
+
+    # 0. RESETEO RÁPIDO DE MODO
+    if txt_lower in ("/normal", "modo normal", "modo jarvis", "vuelve a modo normal", "deja de ser maestro"):
+        db.guardar_modo(cid, "")
+        return {"texto": "Entendido, señor. Desactivando modo especialista y volviendo a modo operativo J.A.R.V.I.S."}
 
     # 1. COMANDOS DIRECTOS DE CONTROL Y TELEMETRÍA (sin gastar tokens)
-    txt_lower = texto_limpio.lower()
     if any(k in txt_lower for k in ["diagnóstico", "diagnostico", "estado de la pc", "batería", "bateria", "sensores", "telemetría"]):
         import jarvis_tools
         return {"texto": jarvis_tools.diagnostico_sistema()}
@@ -103,8 +117,11 @@ def ejecutar(texto, origen, cola, registrar, chat_id=""):
     if any(txt_lower.startswith(k) for k in ["busca en internet ", "busca en la web ", "investiga ", "noticias de ", "precio de ", "clima en "]):
         import jarvis_tools
         consulta = re.sub(r"^(busca en internet|busca en la web|investiga|noticias de|precio de|clima en)\s+", "", texto_limpio, flags=re.I).strip()
-        res = jarvis_tools.buscar_web(consulta)
-        return {"texto": f"Resultados de la red para \"{consulta}\", señor:\n\n{res}"}
+        info_web = jarvis_tools.investigar(consulta)
+        resp = ia.responder_con_info(texto_limpio, info_web, db.obtener_historial(cid), db.obtener_modo(cid))
+        db.agregar_turno(cid, "usuario", texto_limpio)
+        db.agregar_turno(cid, "asistente", resp)
+        return {"texto": resp}
 
     # HABILIDADES UNIFICADAS DE EL BATY.0
     if any(k in txt_lower for k in ["llama a ", "llamar a ", "contacto de ", "teléfono de ", "telefono de "]):
@@ -116,8 +133,32 @@ def ejecutar(texto, origen, cola, registrar, chat_id=""):
         import baty_skills
         return {"texto": baty_skills.leccion_ingles_rapida()}
 
-    cmd = _rapido(texto_limpio) or ia.interpretar_comando(texto_limpio, pendientes)
+    # 2. INTENCIÓN CON IA + MEMORIA + MODO ACTIVO
+    rapido = _rapido(texto_limpio)
+    modo_actual = db.obtener_modo(cid)
+    historial = [] if rapido else db.obtener_historial(cid)
+    cmd = rapido or ia.interpretar_comando(texto_limpio, pendientes, historial, modo_actual)
     accion, tid = cmd.get("accion"), cmd.get("tarea_id")
+
+    if accion == "cambiar_modo":
+        nuevo_modo = (cmd.get("modo") or "").strip()
+        db.guardar_modo(cid, nuevo_modo)
+        resp = (cmd.get("respuesta") or "").strip() or (
+            f"Modo activado: {nuevo_modo}. Empecemos de inmediato, señor." if nuevo_modo
+            else "Modo normal J.A.R.V.I.S. restaurado, señor."
+        )
+        db.agregar_turno(cid, "usuario", texto_limpio)
+        db.agregar_turno(cid, "asistente", resp)
+        return {"texto": resp}
+
+    if accion == "buscar_info":
+        import jarvis_tools
+        consulta = (cmd.get("consulta") or texto_limpio).strip()
+        info_web = jarvis_tools.investigar(consulta)
+        resp = ia.responder_con_info(texto_limpio, info_web, historial, modo_actual)
+        db.agregar_turno(cid, "usuario", texto_limpio)
+        db.agregar_turno(cid, "asistente", resp)
+        return {"texto": resp}
 
     # Si no dijo el número pero solo hay una tarea en revisión, se asume esa.
     revisables = [t for t in pendientes if t["estado"] in ("pendiente_revision", "necesita_aclaracion")]
@@ -178,4 +219,7 @@ def ejecutar(texto, origen, cola, registrar, chat_id=""):
     if accion == "ayuda":
         return {"texto": AYUDA}
 
-    return {"texto": cmd.get("respuesta") or AYUDA}
+    resp = (cmd.get("respuesta") or "").strip() or AYUDA
+    db.agregar_turno(cid, "usuario", texto_limpio)
+    db.agregar_turno(cid, "asistente", resp)
+    return {"texto": resp}
