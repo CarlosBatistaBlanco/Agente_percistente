@@ -211,7 +211,7 @@ def main():
         app.register_blueprint(whatsapp.crear_blueprint(registrar))
         log.info("Webhook WhatsApp en /webhook/whatsapp")
     log.info("Panel de revisión: %s", config.PANEL_URL)
-    app.run(host="127.0.0.1", port=config.PANEL_PUERTO, debug=False, use_reloader=False)
+    app.run(host=config.PANEL_HOST, port=config.PANEL_PUERTO, debug=False, use_reloader=False)
 
 
 if __name__ == "__main__":
