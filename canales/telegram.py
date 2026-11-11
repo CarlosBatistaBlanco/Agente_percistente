@@ -65,6 +65,7 @@ def revisar():
 
         # Notas de voz / audios -> texto
         es_voz = False
+        transcrito = ""
         audio = m.get("voice") or m.get("audio") or m.get("video_note")
         if audio:
             es_voz = True
@@ -73,10 +74,17 @@ def revisar():
                 mime = audio.get("mime_type") or ("video/mp4" if "video_note" in m else "audio/ogg")
                 transcrito = ia.transcribir(_descargar(audio["file_id"]), mime)
                 texto = (texto + "\n" if texto else "") + transcrito
-                if es_dueno:
-                    enviar(chat_id, f"🎤 Entendí: \"{transcrito}\"")
             except Exception as e:
                 enviar(chat_id, f"No pude entender el audio: {e}"[:300])
+                continue
+
+        imagen_bytes = b""
+        if "photo" in m and es_dueno and not reenviado:
+            accion_escribiendo(chat_id)
+            try:
+                imagen_bytes = _descargar(m["photo"][-1]["file_id"])
+            except Exception as e:
+                enviar(chat_id, f"No pude descargar la imagen: {e}"[:300])
                 continue
 
         if "document" in m:
@@ -86,7 +94,7 @@ def revisar():
                                                 _descargar(doc["file_id"]))
             except Exception as e:
                 texto += f"\n[No se pudo descargar el adjunto: {e}]"
-        if not texto.strip():
+        if not texto.strip() and not imagen_bytes:
             continue
 
         if reenviado:
@@ -102,11 +110,13 @@ def revisar():
             "id_externo": f"{chat_id}:{m['message_id']}",
             "remitente": remitente,
             "destino": chat_id,
-            "asunto": "Nota de voz de Telegram" if es_voz else "Mensaje de Telegram",
+            "asunto": "Imagen de Telegram" if imagen_bytes else ("Nota de voz de Telegram" if es_voz else "Mensaje de Telegram"),
             "mensaje": ("[Nota de voz transcrita]\n" if es_voz else "") + texto,
             "referencia": str(m["message_id"]),
             "es_orden": es_dueno and not reenviado,   # tú dándole instrucciones al asistente
             "es_voz": es_voz,
+            "transcrito": transcrito,
+            "imagen_bytes": imagen_bytes,
         })
     return mensajes, acciones
 
