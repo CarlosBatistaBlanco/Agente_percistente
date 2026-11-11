@@ -184,7 +184,7 @@ def crear_app(cola, enviar_tarea, registrar, comando=None):
 
     @app.before_request
     def autenticar():
-        if request.path.startswith("/webhook") or not config.PANEL_CLAVE:
+        if request.path.startswith("/webhook") or request.path == "/health" or not config.PANEL_CLAVE:
             return None
         a = request.authorization
         if not a or a.username != config.PANEL_USUARIO or a.password != config.PANEL_CLAVE:
@@ -198,6 +198,10 @@ def crear_app(cola, enviar_tarea, registrar, comando=None):
 
     def ahora():
         return db.ahora()
+
+    @app.get("/health")
+    def health():
+        return jsonify({"status": "ok"}), 200
 
     @app.get("/")
     def inicio():
