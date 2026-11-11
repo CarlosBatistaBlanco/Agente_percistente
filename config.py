@@ -67,4 +67,12 @@ PANEL_CLAVE = os.getenv("PANEL_CLAVE", "")
 
 SALIDAS_DIR = os.path.join(BASE_DIR, "salidas")
 DB_PATH = os.path.join(BASE_DIR, "tareas.db")
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+
+# --- Briefing diario y recordatorios ---
+ZONA_HORARIA_OFFSET = int(os.getenv("ZONA_HORARIA_OFFSET", "-5"))
+BRIEFING_ACTIVO = _b("BRIEFING_ACTIVO", "true")
+BRIEFING_HORA = os.getenv("BRIEFING_HORA", "08:00")
+BRIEFING_CIUDAD = os.getenv("BRIEFING_CIUDAD", "").strip()
+
 os.makedirs(SALIDAS_DIR, exist_ok=True)
