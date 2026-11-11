@@ -44,6 +44,18 @@ def init():
                 datos_extra TEXT,
                 fecha TEXT
             );
+            CREATE TABLE IF NOT EXISTS conversacion(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id TEXT,
+                rol TEXT,
+                texto TEXT,
+                fecha TEXT
+            );
+            CREATE TABLE IF NOT EXISTS estado_chat(
+                chat_id TEXT PRIMARY KEY,
+                modo TEXT,
+                actualizado TEXT
+            );
             """
         )
 
@@ -121,3 +133,43 @@ def obtener_memoria(limite=50, tipo=None):
         else:
             res = c.execute("SELECT * FROM bitacora_memoria ORDER BY id DESC LIMIT ?", (limite,)).fetchall()
         return [dict(r) for r in res]
+
+
+def agregar_turno(chat_id, rol, texto):
+    """Guarda un turno de conversación reciente por chat (máx. 24 turnos)."""
+    cid = str(chat_id or "panel")
+    with _lock, _con() as c:
+        c.execute("INSERT INTO conversacion(chat_id, rol, texto, fecha) VALUES(?,?,?,?)",
+                  (cid, rol, str(texto)[:3000], ahora()))
+        c.execute(
+            "DELETE FROM conversacion WHERE chat_id=? AND id NOT IN "
+            "(SELECT id FROM conversacion WHERE chat_id=? ORDER BY id DESC LIMIT 24)",
+            (cid, cid),
+        )
+
+
+def obtener_historial(chat_id, limite=10):
+    cid = str(chat_id or "panel")
+    with _lock, _con() as c:
+        rows = c.execute(
+            "SELECT rol, texto, fecha FROM conversacion WHERE chat_id=? ORDER BY id DESC LIMIT ?",
+            (cid, limite),
+        ).fetchall()
+        return [dict(r) for r in reversed(rows)]
+
+
+def guardar_modo(chat_id, modo):
+    cid = str(chat_id or "panel")
+    with _lock, _con() as c:
+        c.execute(
+            "INSERT INTO estado_chat(chat_id, modo, actualizado) VALUES(?,?,?) "
+            "ON CONFLICT(chat_id) DO UPDATE SET modo=excluded.modo, actualizado=excluded.actualizado",
+            (cid, (modo or "").strip(), ahora()),
+        )
+
+
+def obtener_modo(chat_id):
+    cid = str(chat_id or "panel")
+    with _lock, _con() as c:
+        r = c.execute("SELECT modo FROM estado_chat WHERE chat_id=?", (cid,)).fetchone()
+        return (r["modo"] if r else "") or ""
