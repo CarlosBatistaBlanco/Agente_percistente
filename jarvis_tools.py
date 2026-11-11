@@ -10,34 +10,103 @@ import psutil
 import db
 
 
-# ---------------- 1. BÚSQUEDA WEB EN TIEMPO REAL ----------------
-def buscar_web(consulta, max_resultados=4):
-    """Realiza una búsqueda web rápida en tiempo real."""
+# ---------------- 1. BÚSQUEDA WEB Y ACCESO A INFORMACIÓN EN TIEMPO REAL ----------------
+def _buscar_wiki(consulta):
+    import re
+    import requests
+    r = requests.get(
+        "https://es.wikipedia.org/w/api.php",
+        params={"action": "query", "list": "search", "srsearch": consulta,
+                "srlimit": 3, "format": "json", "utf8": 1},
+        headers={"User-Agent": "JarvisAgent/1.0"},
+        timeout=4,
+    )
+    items = (r.json().get("query") or {}).get("search") or []
+    out = []
+    for it in items:
+        snip = re.sub(r"<[^>]+>", "", it.get("snippet", "")).strip()
+        titulo = it.get("title", "")
+        url = "https://es.wikipedia.org/wiki/" + titulo.replace(" ", "_")
+        out.append(f"• [Wikipedia] {titulo}: {snip} ({url})")
+    return out
+
+
+def _buscar_gnews(consulta):
+    import re
+    import xml.etree.ElementTree as ET
+    import requests
+    r = requests.get(
+        "https://news.google.com/rss/search",
+        params={"q": consulta, "hl": "es-419", "gl": "MX", "ceid": "MX:es-419"},
+        headers={"User-Agent": "JarvisAgent/1.0"},
+        timeout=4,
+    )
+    root = ET.fromstring(r.content)
+    out = []
+    for item in root.findall("./channel/item")[:4]:
+        titulo = (item.findtext("title") or "").strip()
+        fecha = (item.findtext("pubDate") or "")[:16]
+        link = (item.findtext("link") or "").strip()
+        if titulo:
+            out.append(f"• [Noticia {fecha}] {re.sub(r'<[^>]+>', '', titulo)} ({link})")
+    return out
+
+
+def _buscar_ddg(consulta, max_resultados=4):
     try:
         from ddgs import DDGS
-        with DDGS() as ddgs:
-            resultados = list(ddgs.text(consulta, max_results=max_resultados))
-            if resultados:
-                lineas = [f"• {r.get('title')}: {r.get('body')} ({r.get('href')})" for r in resultados]
-                res_str = "\n".join(lineas)
-                db.registrar_memoria("busqueda_web", "jarvis_tools", consulta, {"resultados": len(resultados)})
-                return res_str
+        with DDGS(timeout=4) as ddgs:
+            res = list(ddgs.text(consulta, max_results=max_resultados))
+            return [f"• {r.get('title')}: {r.get('body')} ({r.get('href')})" for r in res if r.get("title")]
     except Exception:
-        pass
+        return []
 
-    # Respaldo rápido con duckduckgo html
+
+def buscar_web(consulta, max_resultados=6):
+    """Búsqueda web paralela ultrarrápida (Wikipedia + Google News + DuckDuckGo)."""
+    from concurrent.futures import ThreadPoolExecutor
+    lineas = []
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        futs = [
+            ex.submit(_buscar_ddg, consulta, 4),
+            ex.submit(_buscar_wiki, consulta),
+            ex.submit(_buscar_gnews, consulta),
+        ]
+        for f in futs:
+            try:
+                lineas.extend(f.result(timeout=4.5))
+            except Exception:
+                pass
+    if lineas:
+        db.registrar_memoria("busqueda_web", "jarvis_tools", consulta, {"resultados": len(lineas)})
+        return "\n".join(lineas[:max_resultados * 2])
+    return "No se localizaron registros en vivo para esa consulta."
+
+
+def leer_url(url, max_chars=4500):
+    """Descarga y extrae el texto limpio de cualquier página web pública."""
+    import html
+    import re
+    import requests
     try:
-        import requests
-        import re
-        r = requests.get("https://html.duckduckgo.com/html/", params={"q": consulta}, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-        snippets = re.findall(r'<a class="result__snippet[^>]*>(.*?)</a>', r.text, re.DOTALL)
-        if snippets:
-            limpios = [re.sub(r'<[^>]+>', '', s).strip() for s in snippets[:max_resultados]]
-            return "\n".join(f"• {s}" for s in limpios)
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=6)
+        r.raise_for_status()
+        txt = re.sub(r"<(script|style|noscript)[^>]*>.*?</\1>", " ", r.text, flags=re.S | re.I)
+        txt = re.sub(r"<[^>]+>", " ", txt)
+        txt = re.sub(r"\s+", " ", html.unescape(txt)).strip()
+        return txt[:max_chars] or "La página no devolvió texto legible."
     except Exception as e:
-        return f"Interferencia al conectar con los satélites de información: {e}"
+        return f"No pude leer {url}: {e}"
 
-    return "No se localizaron registros recientes en la red para esa consulta, señor."
+
+def investigar(consulta):
+    """Busca en la web en paralelo y, si viene una URL, extrae su contenido completo."""
+    import re
+    m_url = re.search(r"https?://\S+", consulta)
+    if m_url:
+        url = m_url.group(0).rstrip(".,);]")
+        return f"[CONTENIDO DE {url}]\n" + leer_url(url)
+    return buscar_web(consulta, max_resultados=6)
 
 
 # ---------------- 2. DIAGNÓSTICO DEL SISTEMA ----------------
