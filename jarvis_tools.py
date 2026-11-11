@@ -192,29 +192,85 @@ def capturar_pantalla():
     return ruta
 
 
-# ---------------- 5. TEMPORIZADORES / ALARMAS ----------------
+# ---------------- 5. RECORDATORIOS PERSISTENTES Y BRIEFING DIARIO ----------------
 def crear_temporizador(segundos, mensaje, chat_id=None):
-    """Programa una alarma en segundo plano para avisar en Telegram o Windows."""
-    import threading
-    import time
-    from canales import telegram
+    """Guarda un recordatorio persistente en BD (sobreviendo reinicios de Render)."""
+    import datetime
+    import config
+    cid = str(chat_id or config.TELEGRAM_CHAT_DUENO or "panel")
+    vence_dt = db.ahora_dt() + datetime.timedelta(seconds=int(segundos))
+    vence_str = vence_dt.strftime("%Y-%m-%d %H:%M:%S")
+    rid = db.crear_recordatorio(cid, mensaje, vence_str)
+    unidad = "minutos" if segundos >= 60 else "segundos"
+    cant = segundos // 60 if segundos >= 60 else segundos
+    return f"⏰ Recordatorio #{rid} guardado para las {vence_dt.strftime('%H:%M')} (en {cant} {unidad}), señor: «{mensaje}»."
 
-    def _hilo():
-        time.sleep(segundos)
-        minutos = segundos // 60
-        txt = f"⏰ ALERTA TEMPORIZADA, señor:\n{mensaje} (Transcurrieron {minutos if minutos else segundos} {'minutos' if minutos else 'segundos'})."
-        if chat_id:
-            try:
-                telegram.enviar(chat_id, txt)
-                telegram.enviar_voz(chat_id, f"Señor, recordatorio: {mensaje}")
-            except Exception:
-                pass
-        # Notificación sonora en Windows
+
+def crear_recordatorio_hora(hora, minuto, mensaje, manana=False, chat_id=None):
+    """Programa un recordatorio persistente a una hora exacta HH:MM (hoy o mañana)."""
+    import datetime
+    import config
+    cid = str(chat_id or config.TELEGRAM_CHAT_DUENO or "panel")
+    ahora = db.ahora_dt()
+    objetivo = ahora.replace(hour=hora, minute=minuto, second=0, microsecond=0)
+    if manana or objetivo <= ahora:
+        objetivo += datetime.timedelta(days=1)
+    vence_str = objetivo.strftime("%Y-%m-%d %H:%M:%S")
+    rid = db.crear_recordatorio(cid, mensaje, vence_str)
+    dia = "mañana" if objetivo.date() > ahora.date() else "hoy"
+    return f"⏰ Recordatorio #{rid} programado para {dia} a las {objetivo.strftime('%H:%M')}, señor: «{mensaje}»."
+
+
+def listar_recordatorios(chat_id=None):
+    recs = db.listar_recordatorios(chat_id)
+    if not recs:
+        return "No tiene recordatorios pendientes en agenda, señor."
+    lineas = [f"• #{r['id']} [{r['vence_en'][:16]}] — {r['mensaje']}" for r in recs]
+    return "Recordatorios activos, señor:\n" + "\n".join(lineas)
+
+
+def cancelar_recordatorio(rid):
+    db.marcar_recordatorio(rid, "cancelado")
+    return f"Recordatorio #{rid} cancelado, señor."
+
+
+def generar_briefing(chat_id=None):
+    """Genera el resumen ejecutivo diario (pendientes, recordatorios, clima y noticias)."""
+    import config
+    cid = str(chat_id or config.TELEGRAM_CHAT_DUENO or "panel")
+    ahora = db.ahora_dt()
+    pendientes = db.por_estado("pendiente_revision", "necesita_aclaracion", "error")
+    recs = db.listar_recordatorios(cid)
+    modo = db.obtener_modo(cid)
+
+    partes = [f"☀️ Buenos días, {config.TU_NOMBRE}. Briefing J.A.R.V.I.S. ({ahora.strftime('%d/%m/%Y %H:%M')}):"]
+    partes.append(f"\n📌 Tareas pendientes de revisión: {len(pendientes)}")
+    for t in pendientes[:5]:
+        res = (t.get("analisis") or {}).get("resumen_tarea") or t.get("asunto") or ""
+        partes.append(f"  • #{t['id']} ({t['canal']}): {res[:70]}")
+
+    partes.append(f"\n⏰ Recordatorios activos: {len(recs)}")
+    for r in recs[:5]:
+        partes.append(f"  • #{r['id']} [{r['vence_en'][11:16]}]: {r['mensaje']}")
+
+    if modo:
+        partes.append(f"\n🎓 Modo Maestro activo: {modo} (escríbeme «dame mi clase de hoy» para continuar).")
+
+    if config.BRIEFING_CIUDAD:
         try:
-            import winsound
-            winsound.Beep(1000, 800)
+            import requests
+            w = requests.get(f"https://wttr.in/{config.BRIEFING_CIUDAD}?format=3&lang=es", timeout=4)
+            if w.ok and w.text.strip():
+                partes.append(f"\n🌤️ Clima: {w.text.strip()}")
         except Exception:
             pass
 
-    threading.Thread(target=_hilo, daemon=True).start()
-    return f"Temporizador sincronizado para dentro de {segundos//60 if segundos>=60 else segundos} {'minutos' if segundos>=60 else 'segundos'}, señor: '{mensaje}'."
+    try:
+        noticias = _buscar_gnews("tecnologia inteligencia artificial mundo")[:3]
+        if noticias:
+            partes.append("\n📰 Titulares del día:")
+            partes.extend("  " + n for n in noticias)
+    except Exception:
+        pass
+
+    return "\n".join(partes)
