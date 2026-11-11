@@ -190,12 +190,54 @@ def enviar_tarea(tid, texto=None):
     log.info("#%s ENVIADA por %s a %s", tid, canal, t["destino"])
 
 
+def bucle_programado():
+    """Vigila recordatorios persistentes en BD y envía el briefing diario a la hora configurada."""
+    import jarvis_tools
+    while True:
+        try:
+            ahora_dt = db.ahora_dt()
+            ahora_str = ahora_dt.strftime("%Y-%m-%d %H:%M:%S")
+            for rec in db.recordatorios_vencidos(ahora_str):
+                db.marcar_recordatorio(rec["id"], "enviado")
+                cid = rec.get("chat_id") or config.TELEGRAM_CHAT_DUENO
+                txt = f"⏰ RECORDATORIO #{rec['id']}, señor:\n{rec['mensaje']}"
+                if config.TELEGRAM_ACTIVO and cid and cid != "panel":
+                    try:
+                        telegram.enviar(cid, txt)
+                        if config.VOZ_RESPUESTAS:
+                            telegram.enviar_voz(cid, f"Señor, recordatorio: {rec['mensaje']}")
+                    except Exception as e:
+                        log.warning("Error enviando recordatorio #%s: %s", rec["id"], e)
+                try:
+                    import winsound
+                    winsound.Beep(1000, 700)
+                except Exception:
+                    pass
+
+            if config.BRIEFING_ACTIVO and config.TELEGRAM_ACTIVO and config.TELEGRAM_CHAT_DUENO:
+                hoy = ahora_dt.strftime("%Y-%m-%d")
+                hh_mm = ahora_dt.strftime("%H:%M")
+                if hh_mm >= config.BRIEFING_HORA and db.obtener_kv("briefing_fecha") != hoy:
+                    db.guardar_kv("briefing_fecha", hoy)
+                    resumen = jarvis_tools.generar_briefing(config.TELEGRAM_CHAT_DUENO)
+                    try:
+                        telegram.enviar(config.TELEGRAM_CHAT_DUENO, resumen)
+                        if config.VOZ_RESPUESTAS:
+                            telegram.enviar_voz(config.TELEGRAM_CHAT_DUENO, resumen)
+                    except Exception as e:
+                        log.warning("Error enviando briefing diario: %s", e)
+        except Exception as e:
+            log.error("Programado: %s", e)
+        time.sleep(20)
+
+
 # ---------------------------------------------------------------- INICIO
 def main():
     db.init()
     for t in db.por_estado("nueva", "analizando"):  # retoma lo pendiente tras reinicio
         cola.put(t["id"])
     threading.Thread(target=trabajador, daemon=True).start()
+    threading.Thread(target=bucle_programado, daemon=True).start()
     if config.CORREO_ACTIVO:
         threading.Thread(target=bucle_correo, daemon=True).start()
         log.info("Vigilando correo %s", config.CORREO_USUARIO)
