@@ -25,6 +25,14 @@ REGLAS INQUEBRANTABLES:
 6. Responde SIEMPRE en JSON válido con exactamente la estructura que se te pide, sin texto extra.
 """
 
+SISTEMA_CHAT = (
+    f"Eres J.A.R.V.I.S., asistente personal inteligente de {config.TU_NOMBRE}. "
+    "Responde con precisión, rapidez y claridad en JSON válido sin texto extra."
+)
+
+_SESION = requests.Session()
+_MODELO_CACHE = {"nombre": "", "expira": 0.0}
+
 
 def _json(texto):
     try:
@@ -41,59 +49,73 @@ MODELOS_RESPALDO = [
     "gemini-3.1-flash-lite",
     "gemini-3-flash-preview",
     "gemini-flash-lite-latest",
-    "gemini-flash-latest",
 ]
 
 
-def _llamar(prompt, temperatura=0.2, extra_partes=None, modelos_extra=None):
+def _llamar(prompt, temperatura=0.2, extra_partes=None, modelos_extra=None,
+            sistema=None, timeout=12):
     import time
     if not config.GEMINI_API_KEY:
         raise RuntimeError("Falta GEMINI_API_KEY en el archivo .env")
+    ahora = time.time()
+    preferido = _MODELO_CACHE["nombre"] if ahora < _MODELO_CACHE["expira"] else ""
     candidatos = []
-    for m in [config.GEMINI_MODELO, *(modelos_extra or []), *MODELOS_RESPALDO]:
+    for m in [preferido, config.GEMINI_MODELO, *(modelos_extra or []), *MODELOS_RESPALDO]:
         if m and m not in candidatos:
             candidatos.append(m)
 
     ultimo_error = "Sin respuesta de Gemini"
     payload = {
-        "systemInstruction": {"parts": [{"text": SISTEMA}]},
+        "systemInstruction": {"parts": [{"text": sistema or SISTEMA}]},
         "contents": [{"role": "user", "parts": (extra_partes or []) + [{"text": prompt}]}],
         "generationConfig": {"temperature": temperatura, "responseMimeType": "application/json"},
     }
     for m in candidatos:
-        for intento in range(2):
-            try:
-                r = requests.post(
-                    URL.format(m=m),
-                    params={"key": config.GEMINI_API_KEY},
-                    json=payload,
-                    timeout=45,
-                )
-                if r.status_code == 200:
-                    partes = r.json()["candidates"][0]["content"]["parts"]
-                    return _json("".join(p.get("text", "") for p in partes))
-                ultimo_error = f"Error Gemini {r.status_code} ({m}): {r.text[:300]}"
-                if r.status_code in (400, 401, 403):
-                    raise RuntimeError(ultimo_error)
-                if r.status_code == 404:
-                    break  # modelo no disponible para esta clave -> pasar al siguiente
-                # 429 / 500 / 502 / 503 / 504 -> breve espera y reintento o fallback
-                time.sleep(1.5 * (intento + 1))
-            except requests.RequestException as e:
-                ultimo_error = f"Error red ({m}): {e}"
-                time.sleep(1)
+        try:
+            r = _SESION.post(
+                URL.format(m=m),
+                params={"key": config.GEMINI_API_KEY},
+                json=payload,
+                timeout=timeout,
+            )
+            if r.status_code == 200:
+                _MODELO_CACHE["nombre"] = m
+                _MODELO_CACHE["expira"] = time.time() + 180
+                partes = r.json()["candidates"][0]["content"]["parts"]
+                return _json("".join(p.get("text", "") for p in partes))
+            ultimo_error = f"Error Gemini {r.status_code} ({m}): {r.text[:300]}"
+            if r.status_code in (400, 401, 403):
+                raise RuntimeError(ultimo_error)
+            # 404 / 429 / 503 -> saltar de inmediato al siguiente modelo
+        except requests.RequestException as e:
+            ultimo_error = f"Error red ({m}): {e}"
     raise RuntimeError(ultimo_error)
 
 
-# ---------------------------------------------------------------- VOZ
+# ---------------------------------------------------------------- VOZ Y VISIÓN
 def transcribir(audio: bytes, mime="audio/ogg"):
     """Convierte una nota de voz en texto (Gemini entiende audio directamente)."""
     import base64
     r = _llamar('Transcribe LITERALMENTE este audio, en su idioma original, corrigiendo solo '
                 'la puntuación. Devuelve JSON: {"texto": "..."}', 0.0,
                 [{"inline_data": {"mime_type": mime,
-                                  "data": base64.b64encode(audio).decode()}}])
+                                  "data": base64.b64encode(audio).decode()}}],
+                sistema=SISTEMA_CHAT, timeout=15)
     return (r.get("texto") or "").strip()
+
+
+def _resumir_para_voz(texto, max_chars=480):
+    limpio = re.sub(r"[#*`•✅❌⚠️🎉📌🎤⚙️🔎✉️📝🤖]", "", texto or "")
+    limpio = re.sub(r"https?://\S+", "el enlace", limpio)
+    limpio = re.sub(r"\s+", " ", limpio).strip()
+    if len(limpio) <= max_chars:
+        return limpio
+    corte = limpio[:max_chars]
+    for sep in (". ", "! ", "? "):
+        idx = corte.rfind(sep)
+        if idx > 150:
+            return corte[:idx + 1]
+    return corte
 
 
 def sintetizar_voz(texto, voz=None):
@@ -102,10 +124,10 @@ def sintetizar_voz(texto, voz=None):
     import io
     import wave
     voz = voz or config.VOZ_MODELO
-    limpio = re.sub(r"[#•✅❌⚠️🎉📌]", "", texto)[:800].strip()
+    limpio = _resumir_para_voz(texto)
     if not limpio:
         return b""
-    r = requests.post(
+    r = _SESION.post(
         URL.format(m="gemini-2.5-flash-preview-tts"),
         params={"key": config.GEMINI_API_KEY},
         json={
@@ -115,7 +137,7 @@ def sintetizar_voz(texto, voz=None):
                 "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voz}}}
             }
         },
-        timeout=60,
+        timeout=15,
     )
     if r.status_code != 200:
         raise RuntimeError(f"Error TTS Gemini: {r.text[:300]}")
@@ -129,12 +151,34 @@ def sintetizar_voz(texto, voz=None):
     return buf.getvalue()
 
 
-def interpretar_comando(texto, pendientes):
-    """Entiende lo que TÚ le dices (por voz o texto) y lo convierte en una acción."""
+def _texto_historial(historial):
+    if not historial:
+        return "(inicio de conversación)"
+    return "\n".join(f"{'Carlos' if h['rol']=='usuario' else 'Jarvis'}: {h['texto'][:400]}"
+                     for h in historial[-6:])
+
+
+def _bloque_persona(modo):
+    if modo:
+        return (f"MODO ACTIVO: {modo}. Actúa 100% como ese rol/maestro de élite para {config.TU_NOMBRE}: "
+                "enseña con claridad, ejemplos prácticos, ejercicios cortos y adapta el nivel a sus respuestas, "
+                "manteniendo la precisión y elegancia de J.A.R.V.I.S.")
+    return (f"PERSONALIDAD: Eres J.A.R.V.I.S., el asistente personal inteligente de {config.TU_NOMBRE}. "
+            "Responde directo, claro, con seguridad técnica y trato cercano ('señor' o 'Carlos' cuando quede natural). "
+            "Si te piden convertirte en maestro/profesor/entrenador o adoptar un rol, acéptalo de inmediato.")
+
+
+def interpretar_comando(texto, pendientes, historial=None, modo=""):
+    """Entiende órdenes, conversación continua, cambios de rol (Maestro) o búsqueda en vivo."""
     lista = "\n".join(f"#{t['id']} | {t['canal']} | {t['remitente']} | "
                       f"{(t.get('analisis') or {}).get('resumen_tarea', t.get('asunto', ''))} | {t['estado']}"
                       for t in pendientes) or "(no hay tareas pendientes)"
-    prompt = f"""{config.TU_NOMBRE} (tu jefe) te dice:
+    prompt = f"""{_bloque_persona(modo)}
+
+HISTORIAL RECIENTE:
+{_texto_historial(historial)}
+
+MENSAJE ACTUAL DE {config.TU_NOMBRE}:
 <<<
 {texto}
 >>>
@@ -142,22 +186,55 @@ def interpretar_comando(texto, pendientes):
 TAREAS PENDIENTES DE REVISIÓN:
 {lista}
 
-Decide qué quiere y devuelve JSON:
+Decide qué acción tomar y devuelve JSON válido:
 {{
-  "accion": "nueva_tarea | listar | ver | aprobar | rechazar | corregir | ayuda | conversar",
+  "accion": "nueva_tarea | listar | ver | aprobar | rechazar | corregir | ayuda | cambiar_modo | buscar_info | conversar",
   "tarea_id": null,
+  "modo": "",
+  "consulta": "",
   "texto": "",
   "respuesta": ""
 }}
-- nueva_tarea: te pide que hagas algo nuevo (redactar, hacer un Excel, un Word...). "texto" = la tarea completa tal cual la pidió.
-- listar: quiere saber qué hay pendiente.
-- ver: quiere que le leas/muestres una tarea.
-- aprobar: quiere enviar una tarea. rechazar: descartarla.
-- corregir: quiere cambios en una tarea; "texto" = las indicaciones exactas de corrección.
-- ayuda: pregunta qué puedes hacer. conversar: cualquier otra cosa; "respuesta" = tu respuesta breve.
-- "tarea_id": número de la tarea a la que se refiere (si dice "la última", "la de Laura", etc., dedúcelo de la lista; si no se puede saber, null).
-No inventes números de tarea que no estén en la lista."""
-    return _llamar(prompt, 0.0)
+REGLAS:
+- cambiar_modo: cuando te pide que te conviertas en su maestro/profesor/tutor/coach o cambies de rol (ej. "conviértete en mi maestro de inglés"), O cuando pide volver a modo normal ("vuelve a modo jarvis/normal" -> "modo": ""). En "modo" pon la especialidad exacta (o "" para modo normal) y en "respuesta" inicia de inmediato asumiendo ese rol (ej. primer paso/pregunta de nivel o primera micro-lección).
+- buscar_info: cuando pide datos actuales en vivo (noticias de hoy, precios/cotizaciones de hoy, clima, URLs) o investigación profunda en internet. Pon en "consulta" palabras clave cortas en español o inglés (o la URL). Para conocimiento general o preguntas directas que ya sabes con certeza, responde directo con "conversar".
+- nueva_tarea: cuando te pide crear un archivo (Word, Excel) o redactar un correo/mensaje formal para alguien. "texto" = la tarea completa.
+- listar / ver / aprobar / rechazar / corregir: sobre las TAREAS PENDIENTES. Nunca inventes tarea_id.
+- conversar: diálogo general, explicaciones, clases del modo activo, preguntas de conocimiento, lluvia de ideas. En "respuesta" contesta de forma completa, clara y directa (sin rodeos)."""
+    return _llamar(prompt, 0.25, sistema=SISTEMA_CHAT, timeout=14)
+
+
+def responder_con_info(pregunta, info_web, historial=None, modo=""):
+    """Sintetiza información en vivo de internet en una respuesta precisa de J.A.R.V.I.S."""
+    prompt = f"""{_bloque_persona(modo)}
+
+HISTORIAL RECIENTE:
+{_texto_historial(historial)}
+
+PREGUNTA DE {config.TU_NOMBRE}:
+{pregunta}
+
+RESULTADOS EN VIVO DE INTERNET:
+<<<
+{info_web[:6000]}
+>>>
+
+Responde en JSON: {{"respuesta": "..."}}
+Reglas: usa la información verificada anterior (y tu conocimiento sólido si los resultados fueron parciales), sé claro, directo y concreto; incluye enlaces si aportan valor y nunca escribas marcadores [PENDIENTE]."""
+    return (_llamar(prompt, 0.2, sistema=SISTEMA_CHAT, timeout=14).get("respuesta") or "").strip()
+
+
+def analizar_imagen(imagen: bytes, instruccion="", mime="image/jpeg", modo=""):
+    """Analiza fotos, capturas, diagramas o problemas enviados por el usuario."""
+    import base64
+    prompt = f"""{_bloque_persona(modo)}
+Analiza esta imagen para {config.TU_NOMBRE}.
+Instrucción del usuario: {instruccion or "Describe lo que ves y ayuda con lo más útil (si es un problema, resuélvelo paso a paso)."}
+Devuelve JSON: {{"respuesta": "..."}}"""
+    r = _llamar(prompt, 0.2, [{"inline_data": {"mime_type": mime,
+                                                 "data": base64.b64encode(imagen).decode()}}],
+                sistema=SISTEMA_CHAT, timeout=18)
+    return (r.get("respuesta") or "").strip()
 
 
 def _bloque(t):
