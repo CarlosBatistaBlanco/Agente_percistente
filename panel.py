@@ -35,13 +35,14 @@ border-radius:12px;box-shadow:0 4px 14px #0003;font-size:14px;white-space:pre-wr
 .mini{padding:4px 10px;background:#e9ecef;font-size:16px}
 </style></head><body><header><a href="/">🤖 Agente de tareas</a><span>{{ ahora }}</span></header><main>
 {% block c %}{% endblock %}</main>
+<div id="vozEstado"></div>
 <button id="mic" title="Activar escucha continua (Wake word: Jarvis)" onclick="alternarVoz()">🎤</button>
 <script>
 const NOMBRE_ASISTENTE = "{{ nombre_asistente }}";
 const IDIOMA = "{{ idioma }}";
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 window.ocupado = false;
-function estado(t){const e=document.getElementById('vozEstado');e.style.display=t?'block':'none';e.textContent=t;}
+function estado(t){const e=document.getElementById('vozEstado');if(!e)return;e.style.display=t?'block':'none';e.textContent=t;}
 function hablar(t){
   if(!window.speechSynthesis) return null;
   speechSynthesis.cancel();
@@ -115,6 +116,28 @@ function alternarVoz(){
 </script></body></html>"""
 
 LISTA = BASE.replace("{% block c %}{% endblock %}", """
+<div class="card"><h3>⚡ Chat en tiempo real con {{ nombre_asistente }}
+<button type="button" class="mini" onclick="dictar('chatIn')" title="Dictar">🎤</button></h3>
+<div id="chatLog" style="max-height:240px;overflow:auto;background:#f7f9fc;padding:10px;border-radius:8px;margin-bottom:8px;font-size:14px;white-space:pre-wrap">Listo, señor. Pídame cualquier información, tarea, o dígame «conviértete en mi maestro de...»</div>
+<div style="display:flex;gap:8px"><input id="chatIn" type="text" placeholder="Escribe o dicta a Jarvis en tiempo real..." style="flex:1;padding:10px;border-radius:8px;border:1px solid #ccc;font-size:14px" onkeydown="if(event.key==='Enter'){event.preventDefault();enviarChat()}">
+<button type="button" class="re" style="margin:0" onclick="enviarChat()">Enviar</button></div></div>
+<script>
+async function enviarChat(){
+  const inp=document.getElementById('chatIn'), log=document.getElementById('chatLog');
+  const txt=inp.value.trim(); if(!txt) return;
+  inp.value=''; window.ocupado=true;
+  log.textContent += '\\n\\n🧑 Tú: ' + txt + '\\n⏳ ...';
+  log.scrollTop = log.scrollHeight;
+  try{
+    const r=await fetch('/voz',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({texto:txt})});
+    const d=await r.json();
+    log.textContent = log.textContent.replace(/\\n⏳ \\.\\.\\.$/, '') + '\\n🤖 Jarvis: ' + (d.texto||'');
+    hablar(d.texto||'');
+    if(d.ir_a) setTimeout(()=>location=d.ir_a, 1800);
+  }catch(e){ log.textContent += '\\n⚠️ Error: '+e; }
+  window.ocupado=false; log.scrollTop=log.scrollHeight;
+}
+</script>
 <div class="card"><h3>Probar / crear tarea manual <button type="button" class="mini" onclick="dictar('msgNueva')" title="Dictar">🎤</button></h3>
 <p><small>Escribe, dicta con 🎤, o presiona el botón azul de abajo a la derecha para <b>hablar con el agente</b>
 (ej. "¿qué tengo pendiente?", "léeme la tarea 1", "hazme un Excel con...").</small></p>
@@ -128,7 +151,7 @@ LISTA = BASE.replace("{% block c %}{% endblock %}", """
 <td>{{ (t.analisis or {}).get('resumen_tarea', t.asunto or '')[:80] if t.analisis is mapping else (t.asunto or '') }}</td>
 <td><span class="b {{t.estado}}">{{t.estado.replace('_',' ')}}</span></td><td>{{t.creado}}</td></tr>
 {% else %}<tr><td colspan="6">Aún no hay tareas.</td></tr>{% endfor %}
-</table></div><script>setInterval(()=>{if(!window.ocupado && !document.getElementById('msgNueva').value && !speechSynthesis.speaking) location.reload()},20000)</script>""")
+</table></div><script>setInterval(()=>{if(!window.ocupado && !document.getElementById('msgNueva').value && !document.getElementById('chatIn').value && !speechSynthesis.speaking) location.reload()},20000)</script>""")
 
 DETALLE = BASE.replace("{% block c %}{% endblock %}", """
 {% set a = t.analisis if t.analisis is mapping else {} %}{% set v = t.verificacion if t.verificacion is mapping else {} %}
