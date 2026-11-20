@@ -3,6 +3,7 @@
 - Mensajes/notas de voz TUYOS (el dueño)    -> son ÓRDENES para el asistente.
 - Mensajes que tú REENVÍAS al bot           -> se vuelven TAREAS.
 - Te avisa con botones Aprobar/Rechazar y te puede contestar con voz."""
+import logging
 import os
 import tempfile
 
@@ -11,6 +12,8 @@ import requests
 import config
 import ia
 from ejecutores import extraer_texto
+
+log = logging.getLogger("telegram")
 
 _offset = 0
 SOLICITUDES_PENDIENTES = set()
@@ -155,8 +158,9 @@ def enviar_voz(chat_id, texto):
                                   files={"voice": ("jarvis.wav", f, "audio/wav")}, timeout=60)
             if r.ok:
                 return
-    except Exception:
-        pass
+            log.warning("Telegram rechazo sendVoice WAV: %s", r.text[:200])
+    except Exception as e:
+        log.warning("Fallo voz neural Gemini (Fenrir): %s", e)
 
     # Respaldo rápido con gTTS
     try:
