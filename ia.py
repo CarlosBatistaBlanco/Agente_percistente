@@ -105,15 +105,22 @@ def transcribir(audio: bytes, mime="audio/ogg"):
 
 
 def _resumir_para_voz(texto, max_chars=480):
-    limpio = re.sub(r"[#*`•✅❌⚠️🎉📌🎤⚙️🔎✉️📝🤖]", "", texto or "")
-    limpio = re.sub(r"https?://\S+", "el enlace", limpio)
+    # Eliminar markdown links [Texto](url) -> Texto
+    limpio = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", texto or "")
+    # Eliminar etiquetas como [Noticia ...], [Wikipedia], etc.
+    limpio = re.sub(r"\[[^\]]+\]", "", limpio)
+    # Eliminar URLs directas completamente (no deletrear ni leer enlaces en voz)
+    limpio = re.sub(r"https?://\S+", "", limpio)
+    limpio = re.sub(r"\(https?://\S+\)", "", limpio)
+    # Eliminar símbolos, emojis y viñetas
+    limpio = re.sub(r"[#*`_~•✅❌⚠️🎉📌🎤⚙️🔎✉️📝🤖\"«»]", "", limpio)
     limpio = re.sub(r"\s+", " ", limpio).strip()
     if len(limpio) <= max_chars:
         return limpio
     corte = limpio[:max_chars]
     for sep in (". ", "! ", "? "):
         idx = corte.rfind(sep)
-        if idx > 150:
+        if idx > 120:
             return corte[:idx + 1]
     return corte
 
@@ -137,7 +144,7 @@ def sintetizar_voz(texto, voz=None):
                 "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voz}}}
             }
         },
-        timeout=15,
+        timeout=25,
     )
     if r.status_code != 200:
         raise RuntimeError(f"Error TTS Gemini: {r.text[:300]}")
