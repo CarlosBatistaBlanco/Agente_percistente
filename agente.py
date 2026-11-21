@@ -180,6 +180,8 @@ def enviar_tarea(tid, texto=None):
     archivo = "" if t["estado"] == "necesita_aclaracion" else (t.get("archivo") or "")
     canal = t["canal"]
     if canal == "correo":
+        if not config.CORREO_ACTIVO:
+            raise RuntimeError("El envío automático por correo está desactivado en .env (falta contraseña de aplicación). Copie el texto para pegarlo en su correo.")
         correo.enviar(t["destino"], t["asunto"], texto, archivo, t.get("referencia"))
     elif canal == "telegram":
         telegram.enviar(t["destino"], texto, archivo, t.get("referencia"))
