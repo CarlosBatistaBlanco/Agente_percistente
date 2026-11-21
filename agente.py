@@ -65,8 +65,9 @@ def _orden_telegram(m):
     texto_mostrar = f"🎤 «{m['transcrito']}»\n\n{texto_resp}" if m.get("transcrito") else texto_resp
     telegram.enviar(chat, texto_mostrar, r.get("archivo") or "", botones=r.get("botones"))
 
-    # Respuesta por voz ÚNICAMENTE si tú enviaste una nota de voz
-    if m.get("es_voz") and texto_resp:
+    # Respuesta por voz si enviaste nota de voz O si pediste voz explícitamente
+    quiere_voz = m.get("es_voz") or any(k in m.get("mensaje", "").lower() for k in ["por voz", "con audio", "en audio", "dímelo", "dimelo", "háblame", "hablame", "léeme", "leeme"])
+    if quiere_voz and texto_resp:
         try:
             telegram.enviar_voz(chat, texto_resp)
         except Exception as e:
