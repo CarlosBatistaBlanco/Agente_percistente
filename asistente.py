@@ -239,9 +239,14 @@ def ejecutar(texto, origen, cola, registrar, chat_id=""):
         canal, destino = ("telegram", chat_id) if origen == "telegram" else ("manual", "")
         nid = registrar(canal, f"dictado-{time.time()}", f"{config.TU_NOMBRE} (dictado)", destino,
                         "Tarea dictada", contenido)
-        return {"texto": f"A la orden, señor. Registré la tarea #{nid}: \"{contenido[:200]}\". "
-                         "Iniciando análisis, resolución y verificación de calidad.",
-                "ir_a": f"/tarea/{nid}"}
+        borrador = (cmd.get("respuesta") or "").strip()
+        if borrador:
+            texto_ret = f"{borrador}\n\n📌 Registrada como tarea #{nid} en su panel."
+        else:
+            texto_ret = f"A la orden, señor. Registré la tarea #{nid}: «{contenido[:200]}». Iniciando análisis y resolución."
+        db.agregar_turno(cid, "usuario", texto_limpio)
+        db.agregar_turno(cid, "asistente", texto_ret)
+        return {"texto": texto_ret, "ir_a": f"/tarea/{nid}"}
 
     if accion == "ayuda":
         return {"texto": AYUDA}
