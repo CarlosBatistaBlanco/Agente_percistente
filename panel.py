@@ -62,14 +62,31 @@ function reproducirVoz(audioB64, fallbackTexto){
   }
   return hablar(fallbackTexto);
 }
+function pedirPermisoMic(){
+  if(navigator.mediaDevices && navigator.mediaDevices.getUserMedia){
+    return navigator.mediaDevices.getUserMedia({audio:true});
+  }
+  return Promise.resolve();
+}
 function escuchar(cb){
   if(!SR){alert('Tu navegador no soporta reconocimiento de voz. Usa Google Chrome o Microsoft Edge.');return;}
-  const r=new SR(); r.lang=IDIOMA; r.interimResults=false; r.maxAlternatives=1;
-  const b=document.getElementById('mic'); b.classList.add('rec'); window.ocupado=true;
-  r.onresult=e=>cb(e.results[0][0].transcript);
-  r.onerror=e=>{window.ocupado=false;estado('No te escuché ('+e.error+'). Revisa el permiso del micrófono.');};
-  r.onend=()=>b.classList.remove('rec');
-  r.start();
+  pedirPermisoMic().then(()=>{
+    const r=new SR(); r.lang=IDIOMA; r.interimResults=false; r.maxAlternatives=1;
+    const b=document.getElementById('mic'); b.classList.add('rec'); window.ocupado=true;
+    r.onresult=e=>cb(e.results[0][0].transcript);
+    r.onerror=e=>{
+      window.ocupado=false;
+      if(e.error==='not-allowed'||e.error==='service-not-allowed'){
+        estado('⚠️ MICRÓFONO BLOQUEADO:\\nHaz clic en el candado 🔒 o icono de ajustes al lado de la URL (http://127.0.0.1:5000) y pon "Micrófono" en "Permitir".');
+      } else {
+        estado('Aviso mic ('+e.error+'). Puedes usar el chat de texto abajo.');
+      }
+    };
+    r.onend=()=>b.classList.remove('rec');
+    r.start();
+  }).catch(()=>{
+    estado('⚠️ MICRÓFONO BLOQUEADO:\\nHaz clic en el candado 🔒 al lado de la URL en la barra de direcciones y cambia "Micrófono" a "Permitir".');
+  });
 }
 function dictar(id){escuchar(t=>{const el=document.getElementById(id);el.value=(el.value?el.value+' ':'')+t;window.ocupado=false;});}
 let reconocimientoActivo = null;
@@ -77,37 +94,45 @@ let escuchandoContinuo = false;
 
 function iniciarEscuchaContinua(){
   if(!SR) return;
-  if(reconocimientoActivo){try{reconocimientoActivo.stop()}catch(e){}}
-  const r = new SR();
-  r.lang = IDIOMA;
-  r.continuous = true;
-  r.interimResults = false;
-  r.onresult = async e => {
-    const ultimo = e.results[e.results.length - 1][0].transcript.trim();
-    const patron = new RegExp('^'+NOMBRE_ASISTENTE+'[\\\\s,:]*(.*)$', 'i');
-    const m = ultimo.match(patron);
-    if(m){
-      const comando = m[1].trim() || 'hola';
-      estado('🎙️ Activado por: "' + ultimo + '"\\n⏳ Procesando...');
-      try{
-        const resp = await fetch('/voz', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({texto: comando})
-        });
-        const d = await resp.json();
-        estado(d.texto);
-        const u = reproducirVoz(d.audio, d.texto);
-        if(d.ir_a && location.pathname !== d.ir_a){
-          const ir = () => { location = d.ir_a; };
-          if(u && u.onend){ u.onend = ir; } else { setTimeout(ir, 2500); }
-        }
-      }catch(err){ estado('Error: ' + err); }
-    }
-  };
-  r.onerror = e => { if(e.error!=='no-speech') console.log('Escucha continua:', e.error); };
-  r.onend = () => { if(escuchandoContinuo) try{r.start();}catch(e){} };
-  try{ r.start(); escuchandoContinuo = true; reconocimientoActivo = r; }catch(e){}
+  pedirPermisoMic().then(()=>{
+    if(reconocimientoActivo){try{reconocimientoActivo.stop()}catch(e){}}
+    const r = new SR();
+    r.lang = IDIOMA;
+    r.continuous = true;
+    r.interimResults = false;
+    r.onresult = async e => {
+      const ultimo = e.results[e.results.length - 1][0].transcript.trim();
+      const patron = new RegExp('^'+NOMBRE_ASISTENTE+'[\\\\s,:]*(.*)$', 'i');
+      const m = ultimo.match(patron);
+      if(m){
+        const comando = m[1].trim() || 'hola';
+        estado('🎙️ Activado por: "' + ultimo + '"\\n⏳ Procesando...');
+        try{
+          const resp = await fetch('/voz', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({texto: comando})
+          });
+          const d = await resp.json();
+          estado(d.texto);
+          const u = reproducirVoz(d.audio, d.texto);
+          if(d.ir_a && location.pathname !== d.ir_a){
+            const ir = () => { location = d.ir_a; };
+            if(u && u.onend){ u.onend = ir; } else { setTimeout(ir, 2500); }
+          }
+        }catch(err){ estado('Error: ' + err); }
+      }
+    };
+    r.onerror = e => {
+      if(e.error==='not-allowed'){
+        estado('⚠️ Micrófono bloqueado: Haz clic en el candado 🔒 de la barra de direcciones y activa "Micrófono".');
+      }
+    };
+    r.onend = () => { if(escuchandoContinuo) try{r.start();}catch(e){} };
+    try{ r.start(); escuchandoContinuo = true; reconocimientoActivo = r; }catch(e){}
+  }).catch(()=>{
+    estado('⚠️ Micrófono bloqueado: Haz clic en el candado 🔒 de la barra de direcciones y activa "Micrófono".');
+  });
 }
 
 function alternarVoz(){
@@ -127,25 +152,32 @@ function alternarVoz(){
 
 LISTA = BASE.replace("{% block c %}{% endblock %}", """
 <div class="card"><h3>⚡ Chat en tiempo real con {{ nombre_asistente }}
-<button type="button" class="mini" onclick="dictar('chatIn')" title="Dictar">🎤</button></h3>
-<div id="chatLog" style="max-height:240px;overflow:auto;background:#f7f9fc;padding:10px;border-radius:8px;margin-bottom:8px;font-size:14px;white-space:pre-wrap">Listo, señor. Pídame cualquier información, tarea, o dígame «conviértete en mi maestro de...»</div>
-<div style="display:flex;gap:8px"><input id="chatIn" type="text" placeholder="Escribe o dicta a Jarvis en tiempo real..." style="flex:1;padding:10px;border-radius:8px;border:1px solid #ccc;font-size:14px" onkeydown="if(event.key==='Enter'){event.preventDefault();enviarChat()}">
+<button type="button" class="mini" onclick="dictar('chatIn')" title="Dictar por voz">🎤 Dictar</button>
+<button type="button" class="mini" onclick="copiarChat()" title="Copiar última respuesta">📋 Copiar respuesta</button></h3>
+<div id="chatLog" style="max-height:280px;overflow:auto;background:#f7f9fc;padding:12px;border-radius:8px;margin-bottom:8px;font-size:14px;white-space:pre-wrap">A la orden, señor. Pídame redactar un correo, documento, buscar cualquier dato en internet, hacer cálculos o dar una clase.</div>
+<div style="display:flex;gap:8px"><input id="chatIn" type="text" placeholder="Ej: Redáctame un correo para mi jefe pidiendo permiso por cita médica..." style="flex:1;padding:10px;border-radius:8px;border:1px solid #ccc;font-size:14px" onkeydown="if(event.key==='Enter'){event.preventDefault();enviarChat()}">
 <button type="button" class="re" style="margin:0" onclick="enviarChat()">Enviar</button></div></div>
 <script>
+let ultimaRespuesta = "";
 async function enviarChat(){
   const inp=document.getElementById('chatIn'), log=document.getElementById('chatLog');
   const txt=inp.value.trim(); if(!txt) return;
   inp.value=''; window.ocupado=true;
-  log.textContent += '\\n\\n🧑 Tú: ' + txt + '\\n⏳ ...';
+  log.textContent += '\\n\\n🧑 Tú: ' + txt + '\\n⏳ Procesando con Jarvis...';
   log.scrollTop = log.scrollHeight;
   try{
     const r=await fetch('/voz',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({texto:txt})});
     const d=await r.json();
-    log.textContent = log.textContent.replace(/\\n⏳ \\.\\.\\.$/, '') + '\\n🤖 Jarvis: ' + (d.texto||'');
+    ultimaRespuesta = d.texto || '';
+    log.textContent = log.textContent.replace(/\\n⏳ Procesando con Jarvis\\.\\.\\.$/, '') + '\\n🤖 Jarvis:\\n' + ultimaRespuesta;
     reproducirVoz(d.audio, d.texto||'');
-    if(d.ir_a) setTimeout(()=>location=d.ir_a, 1800);
+    if(d.ir_a) setTimeout(()=>location=d.ir_a, 2200);
   }catch(e){ log.textContent += '\\n⚠️ Error: '+e; }
   window.ocupado=false; log.scrollTop=log.scrollHeight;
+}
+function copiarChat(){
+  if(!ultimaRespuesta){alert('Aún no hay respuesta para copiar.');return;}
+  navigator.clipboard.writeText(ultimaRespuesta).then(()=>alert('✅ Texto copiado al portapapeles. Listo para pegar en tu correo o documento.')).catch(()=>prompt('Copia el texto:', ultimaRespuesta));
 }
 </script>
 <div class="card"><h3>Probar / crear tarea manual <button type="button" class="mini" onclick="dictar('msgNueva')" title="Dictar">🎤</button></h3>
