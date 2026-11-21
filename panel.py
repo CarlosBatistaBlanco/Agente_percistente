@@ -52,6 +52,16 @@ function hablar(t){
   if(v) u.voice=v;
   speechSynthesis.speak(u); return u;
 }
+function reproducirVoz(audioB64, fallbackTexto){
+  if(audioB64){
+    try{
+      const snd = new Audio("data:audio/wav;base64," + audioB64);
+      snd.play();
+      return snd;
+    }catch(err){ console.log("Audio HTML5 fallo:", err); }
+  }
+  return hablar(fallbackTexto);
+}
 function escuchar(cb){
   if(!SR){alert('Tu navegador no soporta reconocimiento de voz. Usa Google Chrome o Microsoft Edge.');return;}
   const r=new SR(); r.lang=IDIOMA; r.interimResults=false; r.maxAlternatives=1;
@@ -87,10 +97,10 @@ function iniciarEscuchaContinua(){
         });
         const d = await resp.json();
         estado(d.texto);
-        const u = hablar(d.texto);
+        const u = reproducirVoz(d.audio, d.texto);
         if(d.ir_a && location.pathname !== d.ir_a){
           const ir = () => { location = d.ir_a; };
-          if(u){ u.onend = ir; } else { setTimeout(ir, 2500); }
+          if(u && u.onend){ u.onend = ir; } else { setTimeout(ir, 2500); }
         }
       }catch(err){ estado('Error: ' + err); }
     }
@@ -132,7 +142,7 @@ async function enviarChat(){
     const r=await fetch('/voz',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({texto:txt})});
     const d=await r.json();
     log.textContent = log.textContent.replace(/\\n⏳ \\.\\.\\.$/, '') + '\\n🤖 Jarvis: ' + (d.texto||'');
-    hablar(d.texto||'');
+    reproducirVoz(d.audio, d.texto||'');
     if(d.ir_a) setTimeout(()=>location=d.ir_a, 1800);
   }catch(e){ log.textContent += '\\n⚠️ Error: '+e; }
   window.ocupado=false; log.scrollTop=log.scrollHeight;
@@ -292,6 +302,16 @@ def crear_app(cola, enviar_tarea, registrar, comando=None):
             r = comando(texto, "panel")
         except Exception as e:
             r = {"texto": f"Tuve un problema: {e}"}
-        return jsonify({"texto": r.get("texto", ""), "ir_a": r.get("ir_a")})
+        resp_txt = r.get("texto", "")
+        audio_b64 = ""
+        try:
+            import base64
+            import ia
+            wav = ia.sintetizar_voz(resp_txt)
+            if wav:
+                audio_b64 = base64.b64encode(wav).decode("ascii")
+        except Exception:
+            pass
+        return jsonify({"texto": resp_txt, "ir_a": r.get("ir_a"), "audio": audio_b64})
 
     return app
